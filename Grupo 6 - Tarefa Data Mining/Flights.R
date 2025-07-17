@@ -127,6 +127,13 @@ bfd_azul <- bfd_filtrado %>%
     company == "AZU",
   )
 
+cores_personalizadas <- c(
+  "GLO" = "#F58220",
+  #"AZU" = "#002776",
+  "AZU" = "#ADD8E6",
+  "TAM" = "#A6192E"
+)
+
 # 2. Contar número de ocorrências por bin
 bins_df_depart <- bfd_gol %>%
   count(delay_depart_bin, status_depart_group) %>%
@@ -178,46 +185,66 @@ conf_matrix <- confusionMatrix(
   reference = bfd_filtrado$status_arrival_group
 )
 
-bfd_filtrado %>%
-  #filter(delay_arrival >= -180, delay_arrival <= 180) %>%  # evita outliers extremos
-  ggplot(aes(x = company, y = delay_arrival, fill = company)) +
-  geom_boxplot(outlier.shape = 0.5) +
-  labs(title = "Boxplot de Atraso na Chegada por Companhia",
-       x = "Companhia", y = "Atraso na Chegada (minutos)") +
-  theme_minimal()
-
-iqr_stats_depart_atrasos <- bfd_filtrado %>%
-  filter(status_depart_group == 'Atraso') %>%
+iqr_stats_depart <- bfd_filtrado %>%
+  group_by(company) %>%
   summarise(
     Q1 = quantile(delay_depart, 0.25, na.rm = TRUE),
-    Q3 = quantile(delay_depart, 0.75, na.rm = TRUE)
+    Q3 = quantile(delay_depart, 0.75, na.rm = TRUE),
+    .groups = "drop"
   ) %>%
   mutate(
     IQR = Q3 - Q1,
     lim_inf = Q1 - 1.5 * IQR,
     lim_sup = Q3 + 1.5 * IQR
   )
-print(iqr_stats_depart_atrasos)
 
-bfd_iqr_depart_atrasos <- bfd_filtrado %>%
+bfd_iqr_depart <- bfd_filtrado %>%
+  left_join(iqr_stats_depart_atrasos, by = "company") %>%
   filter(
-    status_depart_group == 'Atraso',
-    delay_depart >= iqr_stats_depart_atrasos$lim_inf,
-    delay_depart <= iqr_stats_depart_atrasos$lim_sup
+    delay_depart >= lim_inf,
+    delay_depart <= lim_sup
   )
 
-View(bfd_iqr_depart_atrasos)
+bfd_iqr_depart %>%
+  ggplot(aes(x = company, y = delay_depart, fill = company)) +
+  geom_boxplot(outlier.shape = 1) +
+  labs(title = "Boxplot de delay na Partida por Companhia",
+       x = "Companhia", y = "Tempo de delay na Partida (minutos)") +
+  theme_minimal()+
+  scale_fill_manual(values = cores_personalizadas)
 
-#Número de outliers removidos
-nrow(bfd_filtrado) - nrow(bfd_iqr_depart_atrasos)
+ iqr_stats_depart_atrasos <- bfd_filtrado %>%
+  filter(status_depart_group == "Atraso") %>%
+  group_by(company) %>%
+  summarise(
+    Q1 = quantile(delay_depart, 0.25, na.rm = TRUE),
+    Q3 = quantile(delay_depart, 0.75, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    IQR = Q3 - Q1,
+    lim_inf = Q1 - 1.5 * IQR,
+    lim_sup = Q3 + 1.5 * IQR
+  )
+
+bfd_iqr_depart_atrasos <- bfd_filtrado %>%
+  filter(status_depart_group == "Atraso") %>%
+  left_join(iqr_stats_depart_atrasos, by = "company") %>%
+  filter(
+    delay_depart >= lim_inf,
+    delay_depart <= lim_sup
+  )
+
+
 
 #Boxplot por companhia
-bfd_iqr_filtrado %>%
+bfd_iqr_depart_atrasos %>%
   ggplot(aes(x = company, y = delay_depart, fill = company)) +
   geom_boxplot(outlier.shape = 1) +
   labs(title = "Boxplot de Atraso na Chegada por Companhia",
        x = "Companhia", y = "Atraso na Partida (minutos)") +
-  theme_minimal()
+  theme_minimal()+
+scale_fill_manual(values = cores_personalizadas)
 
 #Boxplot por aeroporto
 bfd_iqr_filtrado %>%
