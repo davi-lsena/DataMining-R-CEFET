@@ -1,20 +1,12 @@
 ##Visualizando quantas variações das classes temos nos voos
-#view_variations_bfd <- bfd %>%
-#  select(where(~ is.character(.) || is.factor(.))) %>%
-#  map_df(~ list(
-#    num_unicos = n_distinct(.),
-#    valores = paste(unique(.), collapse = ", ")
-#  ), .id = "coluna")
-#View(view_variations_bfd)
+view_variations_bfd <- bfd_filtrado %>%
+  select(where(~ is.character(.) || is.factor(.))) %>%
+  map_df(~ list(
+    num_unicos = n_distinct(.),
+    valores = paste(unique(.), collapse = ", ")
+  ), .id = "coluna")
+View(view_variations_bfd)
 
-#voos_2018 <- read_flights(
-#  date = 2018,
-#  type = "basica",
-#  showProgress = TRUE,
-#  select = NULL,
-#  cache = TRUE
-#)
-#View(voos_2018)
 
 # Importando bibliotecas
 {
@@ -32,6 +24,7 @@ library(WVPlots)
 library(GGally)
 library(aplpack)
 library(DataExplorer)
+library(patchwork)
 }
 
 #Importando bases de dados
@@ -46,29 +39,65 @@ aeroportos_info <- aeroportos %>%
 View(bfd)
 dim(bfd)
 
+aeroportos_arrival <- aeroportos_info %>%
+  rename_with(~paste0("arrival_", .), -codigo_oaci)
 
-#Junta informações do aeroporto de chegada/partida
+aeroportos_depart <- aeroportos_info %>%
+  rename_with(~paste0("depart_", .), -codigo_oaci)
+
+# Faz os joins com as tabelas renomeadas
 bfd_aero <- bfd %>%
-  # Join com o aeroporto de chegada
-  left_join(aeroportos_info, by = c("arrival" = "codigo_oaci")) %>%
-  rename(
-    arrival_ciad = ciad,
-    arrival_nome = nome,
-    arrival_municipio = municipio,
-    arrival_uf = uf,
-    arrival_longitude = longitude,
-    arrival_latitude = latitude
-  ) %>%
-  # Join com o aeroporto de partida
-  left_join(aeroportos_info, by = c("depart" = "codigo_oaci")) %>%
-  rename(
-    depart_ciad = ciad,
-    depart_nome = nome,
-    depart_municipio = municipio,
-    depart_uf = uf,
-    depart_longitude = longitude,
-    depart_latitude = latitude
-  )
+  left_join(aeroportos_arrival, by = c("arrival" = "codigo_oaci")) %>%
+  left_join(aeroportos_depart, by = c("depart" = "codigo_oaci"))
+View(bfd_aero)
+
+cores_personalizadas <- c(
+  "GOL" = "#F58220",
+  "AZUL" = "#ADD8E6",
+  "LATAM" = "#A6192E"
+)
+
+status_cores <- c(
+  "Atraso" = "#D7263D",
+  "Antecipado" = "#1B9AAA",
+  "Pontual" = "#3F784C"
+)
+
+# Agrupa e seleciona as 5 maiores companhias
+top_5_companhias <- bfd_aero %>%
+  filter(!is.na(company)) %>%
+  group_by(company) %>%
+  summarise(total_voos = n()) %>%
+  arrange(desc(total_voos)) %>%
+  slice_head(n = 5)
+
+# Cria o gráfico
+ggplot(top_5_companhias, aes(x = reorder(company, total_voos), y = total_voos, fill = company)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Top 5 Estados em número de voos de 2018",
+    x = "Estado",
+    y = "Total de Voos"
+  ) +
+  theme_minimal()
+
+top_5_estados <- bfd_aero %>%
+  filter(!is.na(depart_uf)) %>%
+  group_by(depart_uf) %>%
+  summarise(total_voos = n()) %>%
+  arrange(desc(total_voos)) %>%
+  slice_head(n = 5)
+
+ggplot(top_5_estados, aes(x = reorder(depart_uf, total_voos), y = total_voos, fill = depart_uf)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Top 5 Estados em número de voos de 2018",
+    x = "Estado",
+    y = "Total de Voos"
+  ) +
+  theme_minimal()
 
 bfd_filtrado <- bfd_aero %>%
   filter(
@@ -101,7 +130,15 @@ bfd_filtrado <- bfd_filtrado %>%
     status_arrival_group = factor(status_arrival_group, levels = c("Pontual", "Atraso", "Antecipado", "Outro"))
   )
 
-
+bfd_filtrado <- bfd_filtrado %>%
+  mutate(
+    company = case_when(
+      company == "GLO" ~ "GOL",
+      company == "AZU" ~ "AZUL",
+      company == "TAM" ~ "LATAM",
+      TRUE ~ company
+    )
+  )
 View(bfd_filtrado)
 
 
@@ -112,72 +149,119 @@ bfd_filtrado <- bfd_filtrado %>%
     delay_arrival_bin = cut(delay_arrival, breaks = seq(-1000, 1000, by = 10), right = FALSE)
   )
 
-bfd_tam <- bfd_filtrado %>%
-  filter(
-    company == "TAM",
+# Função para criar os dados binned por companhia e tipo (depart/arrival)
+## Função para agrupar dados por bin e status
+create_bins_df <- function(df, time_col, status_col) {
+  df %>%
+    filter(!is.na({{time_col}}), !is.na({{status_col}})) %>%
+    count({{time_col}}, {{status_col}}) %>%
+    filter(n > 1) %>%
+    mutate({{time_col}} := factor({{time_col}}, levels = sort(unique({{time_col}}))))
+}
+
+## Função para criar gráfico
+create_plot <- function(df, time_col, status_col, title) {
+  ggplot(df, aes(x = {{time_col}}, y = n + 1, fill = {{status_col}})) +
+    geom_col(position = "stack", color = "black") +
+    scale_fill_manual(values = status_cores, name = "Status do voo") +  # <-- NÃO usar guide = "none"
+    scale_y_log10() +
+    geom_text(aes(label = n), position = position_stack(vjust = 0.5), size = 3) +
+    labs(
+      title = title,
+      x = "Faixa de tempo (min)",
+      y = "Número de Voos (escala log)"
+    ) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+}
+## Lista para armazenar os gráficos
+plots <- list()
+
+## Vetor de companhias para análise
+companhias <- c("GOL", "LATAM", "AZUL")
+
+## Loop para gerar gráficos por companhia
+for (cia in companhias) {
+  df_cia <- bfd_filtrado %>% filter(company == cia)
+
+  ### Criar dados binned
+  bins_depart <- create_bins_df(df_cia, delay_depart_bin, status_depart_group)
+  bins_arrival <- create_bins_df(df_cia, delay_arrival_bin, status_depart_group)
+
+  ### Criar gráficos
+  p_depart <- create_plot(
+    bins_depart, delay_depart_bin, status_depart_group,
+    paste0(cia, " - Minutos até a partida segmentado por status")
   )
 
-bfd_gol <- bfd_filtrado %>%
-  filter(
-    company == "GLO",
+  p_arrival <- create_plot(
+    bins_arrival, delay_arrival_bin, status_depart_group,
+    paste0(cia, " - Minutos até a chegada segmentado por status")
   )
 
-bfd_azul <- bfd_filtrado %>%
-  filter(
-    company == "AZU",
-  )
+  ### Salvar gráficos na lista
+  plots[[paste0(cia, "_depart")]] <- p_depart
+  plots[[paste0(cia, "_arrival")]] <- p_arrival
+}
 
-cores_personalizadas <- c(
-  "GLO" = "#F58220",
-  #"AZU" = "#002776",
-  "AZU" = "#ADD8E6",
-  "TAM" = "#A6192E"
-)
+## Combinar os gráficos em um grid 2x3
+final_plot <- (plots[["GOL_depart"]] + plots[["LATAM_depart"]] + plots[["AZUL_depart"]]) /
+  (plots[["GOL_arrival"]] + plots[["LATAM_arrival"]] + plots[["AZUL_arrival"]]) +
+  plot_layout(guides = "collect") & theme(legend.position = "bottom")
 
-# 2. Contar número de ocorrências por bin
-bins_df_depart <- bfd_gol %>%
-  count(delay_depart_bin, status_depart_group) %>%
-  filter(n > 1)  # <- Aqui você define o mínimo de ocorrências
+## Exibir o grid
+print(final_plot)
 
-bins_df_arrival <- bfd_gol %>%
-  count(delay_arrival_bin, status_depart_group) %>%
-  filter(n > 1)  # <- Aqui você define o mínimo de ocorrências
 
-# 3. Plotar com ggplot2
-ggplot(bins_df_depart, aes(x = delay_depart_bin, y = n, fill = status_depart_group)) +
-  geom_col(position = "stack", color = "black") +
-  labs(
-    title = "GOL - Tempo de espera de partida por Status",
-    x = "Faixa de tempo (min)",
-    y = "Número de Voos",
-    fill = "Status"
-  ) +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+### Mapa de calor por companhia
+companhias_destacadas <- names(cores_personalizadas)
 
-ggplot(bins_df_arrival, aes(x = delay_arrival_bin, y = n, fill = status_depart_group)) +
-  geom_col(position = "stack", color = "black") +
-  labs(
-    title = "GOL - Tempo de espera de chegada por Status",
-    x = "Faixa de tempo (min)",
-    y = "Número de Voos",
-    fill = "Status"
-  ) +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+dados_por_companhia <- bfd_filtrado %>%
+  filter(company %in% companhias_destacadas) %>%
+  count(company, status_arrival_group, status_depart_group)
 
-bfd_filtrado %>%
-  distinct(depart_nome)
+# Função para gerar o gráfico com gradiente personalizado
+plot_por_companhia <- function(companhia, cor) {
+  dados <- dados_por_companhia %>% filter(company == companhia)
 
-#Mapa de calor por status de partida
+  ggplot(dados, aes(x = status_arrival_group, y = status_depart_group, fill = n)) +
+    geom_tile(color = "white") +
+    geom_text(aes(label = n), color = "black", size = 3) +
+    scale_fill_gradient(low = "white", high = cor) +
+    labs(
+      title = companhia,
+      x = "Status de Chegada",
+      y = "Status de Partida",
+      fill = "Número de Voos"
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(face = "bold", hjust = 0.5),
+      axis.text.x = element_text(angle = 45, hjust = 1)
+    )
+}
+
+# Gera os gráficos
+g_gol   <- plot_por_companhia("GOL", cores_personalizadas["GOL"])
+g_azul  <- plot_por_companhia("AZUL", cores_personalizadas["AZUL"])
+g_latam <- plot_por_companhia("LATAM", cores_personalizadas["LATAM"])
+
+# Junta tudo em uma grade com patchwork (3 colunas)
+(g_gol | g_azul | g_latam) +
+  plot_annotation(title = "Mapa de calor por companhia: Status de Partida x Status Chegada")
+
+#Mapa de calor geral
 bfd_filtrado %>%
   count(status_arrival_group, status_depart_group) %>%
-  ggplot(aes(x = status_arrival_group, y =status_depart_group, fill = n)) +
+  ggplot(aes(x = status_arrival_group, y = status_depart_group, fill = n)) +
   geom_tile(color = "white") +
-  geom_text(aes(label = n), color = "black", size = 4) +
+  geom_text(aes(label = n), color = "black", size = 3) +
   scale_fill_gradient(low = "white", high = "green") +
-  labs(title = "Matriz de Status: Partida x Chegada",
-       x = "Status de Chegada", y = "Status de  Partida", fill = "Número de Voos") +
+  labs(
+    title = "Mapa de c
+    alor: Status de Partida x Status Chegada",
+    x = "Status de Chegada", y = "Status de Partida", fill = "Número de Voos"
+  ) +
   theme_minimal()
 
 conf_matrix <- confusionMatrix(
